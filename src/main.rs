@@ -1,5 +1,5 @@
 use std::{
-    io::{ Read, Write, stdout }, net::{ IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream, UdpSocket }, str::FromStr, time::Duration
+    io::{ IoSlice, Read, Write, stdout }, net::{ IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream, UdpSocket }, str::FromStr, time::Duration
 };
 use quicli::prelude::*;
 use structopt::StructOpt;
@@ -33,7 +33,7 @@ pub struct Init {
     #[structopt(short, long="log", default_value="info", help="Set the log level (error, warn, info, debug, trace)")]
     log: LogLevel,
 
-    #[structopt(long="buffer-size", default_value="4096", help="Set the buffer size for reading/writing data")]
+    #[structopt(long="buffer-size", default_value="32768", help="Set the buffer size for reading/writing data")]
     buffer_size: usize,
 }
 
@@ -116,29 +116,42 @@ fn receive(buffer_size: usize, init: ReceiveInit) -> anyhow::Result<()> {
     log::info!("Binding to {}", init.bind_addr);
     
     let listener = TcpListener::bind(init.bind_addr).unwrap();
-    let (mut stream, addr) = listener.accept()?;
+    let (mut socket_stream, addr) = listener.accept()?;
+    log::info!("Received connection from {}", addr);
 
-    let write = |inp: &[u8]| -> anyhow::Result<()> {
-        stdout().lock().write_all(inp)?;
-        Ok(())
-    };
+
+    log::debug!("locking stdout...");
+    let mut stdout = stdout();
+    log::debug!("ready");
 
     if init.include_connection_info {
-        write(format!("connection: {}\n\n", &addr).as_bytes())?;
+        stdout.write_all(format!("connection: {}\n\n", &addr).as_bytes())?;
+        stdout.flush()?;
     }
-
     let mut buf = vec![0_u8; buffer_size].into_boxed_slice();
+    let mut last_update = std::time::Instant::now();
+    let mut bytes_since_last_update = 0;
     loop {
-        match stream.read(&mut buf) {
-            Ok(0) => {
-                break;
-            }
-            Ok(n) => write(&buf[..n])?,
-            Err(e) => {
-                return Err(anyhow::anyhow!(e));
-            }
+        let read = socket_stream.read(&mut buf)?;
+        log::debug!("Read {} bytes from socket", read);
+        if read == 0 { 
+            log::info!("Stopping...");
+            break; 
+        } 
+        log::debug!("Writing to stdout");
+        stdout.write_all(&buf[..read])?;
+        stdout.flush()?;
+        log::debug!("Done writing to stdout");
+
+        bytes_since_last_update += read;
+        if bytes_since_last_update >= 1024 * 1024 {
+            let speed = ( bytes_since_last_update as f64 / last_update.elapsed().as_secs_f64() ) / (1024.0);
+            log::info!("Speed is around: {speed} kbps", );
+            last_update = std::time::Instant::now();
+            bytes_since_last_update = 0;
         }
     }
+
 
     Ok(())
 }
@@ -147,13 +160,18 @@ pub fn send(buffer_size: usize, init: SendInit) -> anyhow::Result<()> {
     let mut sender = TcpStream::connect(init.address)?;
     let mut buf = vec![0_u8; buffer_size].into_boxed_slice();
     let mut stdin = std::io::stdin();
-    
+
     loop{
         let a = stdin.read(&mut buf)?;
-
-        if a == 0 { break; } 
-
+        log::debug!("Read {} bytes from stdin", a);
+        if a == 0 {
+            log::info!("Stopping...");
+            break; 
+        } 
+        log::debug!("Sending to socket...");
         sender.write_all(&buf[..a])?;
+        sender.flush()?;
+        log::debug!("Done sending to socket");
     }
 
     Ok(())
