@@ -163,6 +163,8 @@ pub fn send(buffer_size: usize, init: SendInit) -> anyhow::Result<()> {
     let mut stdin = io::stdin();
     let mut last_update = time::Instant::now();
     let mut bytes_since_last_update = 0;
+    let mut speed = 0.0;
+    let speed_factor = 0.4;
     loop{
         let read = stdin.read(&mut buf)?;
         log::debug!("Read {} bytes from stdin", read);
@@ -175,9 +177,10 @@ pub fn send(buffer_size: usize, init: SendInit) -> anyhow::Result<()> {
         sender.flush()?;
         log::debug!("Done sending to socket");
         bytes_since_last_update += read;
-        
-        if bytes_since_last_update >= 1024 * 1024 && last_update.elapsed() >= Duration::from_secs(1) {
-            let speed = ( (bytes_since_last_update as f64) / last_update.elapsed().as_secs_f64() ) / (1024.0);
+
+        if bytes_since_last_update >= 1024 * 1024 {
+            let round_speed = ( (bytes_since_last_update as f64) / last_update.elapsed().as_secs_f64() ) / (1024.0); 
+            speed = speed * (1.0 - speed_factor) + round_speed * speed_factor;
             log::info!("Speed is around: {speed:2} kiB/s", );
             last_update = time::Instant::now();
             bytes_since_last_update = 0;
