@@ -175,7 +175,8 @@ pub fn send(buffer_size: usize, init: SendInit) -> anyhow::Result<()> {
         sender.flush()?;
         log::debug!("Done sending to socket");
         bytes_since_last_update += read;
-        if bytes_since_last_update >= 1024 * 1024 {
+        
+        if bytes_since_last_update >= 1024 * 1024 && last_update.elapsed() >= Duration::from_secs(1) {
             let speed = ( (bytes_since_last_update as f64) / last_update.elapsed().as_secs_f64() ) / (1024.0);
             log::info!("Speed is around: {speed:2} kiB/s", );
             last_update = time::Instant::now();
