@@ -8,21 +8,15 @@ fn main() {
     let init: Init = Init::from_args();
 
     env_logger::Builder::new()
-        .filter_level(match init.log {
-            LogLevel::Error => log::LevelFilter::Error,
-            LogLevel::Warn => log::LevelFilter::Warn,
-            LogLevel::Info => log::LevelFilter::Info,
-            LogLevel::Debug => log::LevelFilter::Debug,
-            LogLevel::Trace => log::LevelFilter::Trace,
-        })
+        .filter_level(init.log.into())
         .init();
 
     match init.subcommand {
         SubCommand::Receive(receive_init) => {
-            receive(receive_init).unwrap();
+            receive(init.buffer_size, receive_init).unwrap();
         }
         SubCommand::Send(send_init) => {
-            send(send_init).unwrap();
+            send(init.buffer_size, send_init).unwrap();
         }
         // SubCommand::Socket(_full_socket_init) => {
         //     unimplemented!();
@@ -38,6 +32,9 @@ pub struct Init {
 
     #[structopt(short, long="log", default_value="info", help="Set the log level (error, warn, info, debug, trace)")]
     log: LogLevel,
+
+    #[structopt(long="buffer-size", default_value="4096", help="Set the buffer size for reading/writing data")]
+    buffer_size: usize,
 }
 
 #[derive(Deserialize, Debug, structopt::StructOpt)]
@@ -53,7 +50,17 @@ pub enum LogLevel{
     #[structopt(name = "trace")]
     Trace,
 }
-
+impl Into<log::LevelFilter> for LogLevel {
+    fn into(self) -> log::LevelFilter {
+        match self {
+            LogLevel::Error => log::LevelFilter::Error,
+            LogLevel::Warn => log::LevelFilter::Warn,
+            LogLevel::Info => log::LevelFilter::Info,
+            LogLevel::Debug => log::LevelFilter::Debug,
+            LogLevel::Trace => log::LevelFilter::Trace,
+        }
+    }
+}
 impl FromStr for LogLevel{
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -81,7 +88,7 @@ pub enum SubCommand {
 
 #[derive(Deserialize, Debug, structopt::StructOpt)]
 pub struct SendInit {
-    #[structopt(long, help = "The address to connect to", )]
+    #[structopt(help = "The address to connect to")]
     address: String,
 }
 
@@ -105,7 +112,7 @@ impl Default for ReceiveInit {
     }
 }
 
-fn receive(init: ReceiveInit) -> anyhow::Result<()> {
+fn receive(buffer_size: usize, init: ReceiveInit) -> anyhow::Result<()> {
     log::info!("Binding to {}", init.bind_addr);
     
     let listener = TcpListener::bind(init.bind_addr).unwrap();
@@ -120,7 +127,7 @@ fn receive(init: ReceiveInit) -> anyhow::Result<()> {
         write(format!("connection: {}\n\n", &addr).as_bytes())?;
     }
 
-    let mut buf = [0_u8; 4096];
+    let mut buf = vec![0_u8; buffer_size].into_boxed_slice();
     loop {
         match stream.read(&mut buf) {
             Ok(0) => {
@@ -136,15 +143,17 @@ fn receive(init: ReceiveInit) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn send(init: SendInit) -> anyhow::Result<()> {
+pub fn send(buffer_size: usize, init: SendInit) -> anyhow::Result<()> {
     let mut sender = TcpStream::connect(init.address)?;
-    let mut buf = vec![0_u8; 4096];
+    let mut buf = vec![0_u8; buffer_size].into_boxed_slice();
     let mut stdin = std::io::stdin();
+    
     loop{
         let a = stdin.read(&mut buf)?;
-        if a == 0 { break; } else {
-            sender.write_all(&buf[..a])?;
-        }
+
+        if a == 0 { break; } 
+
+        sender.write_all(&buf[..a])?;
     }
 
     Ok(())
