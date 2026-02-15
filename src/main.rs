@@ -1,5 +1,5 @@
 use std::{
-    io::{ IoSlice, Read, Write, stdout }, net::{ IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream, UdpSocket }, str::FromStr, time::Duration
+    io::{ self, IoSlice, Read, Write, stdout }, net::{ IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream, UdpSocket }, str::FromStr, time::{self, Duration}
 };
 use quicli::prelude::*;
 use structopt::StructOpt;
@@ -129,7 +129,7 @@ fn receive(buffer_size: usize, init: ReceiveInit) -> anyhow::Result<()> {
         stdout.flush()?;
     }
     let mut buf = vec![0_u8; buffer_size].into_boxed_slice();
-    let mut last_update = std::time::Instant::now();
+    let mut last_update = time::Instant::now();
     let mut bytes_since_last_update = 0;
     loop {
         let read = socket_stream.read(&mut buf)?;
@@ -144,10 +144,11 @@ fn receive(buffer_size: usize, init: ReceiveInit) -> anyhow::Result<()> {
         log::debug!("Done writing to stdout");
 
         bytes_since_last_update += read;
+        
         if bytes_since_last_update >= 1024 * 1024 {
-            let speed = ( bytes_since_last_update as f64 / last_update.elapsed().as_secs_f64() ) / (1024.0);
-            log::info!("Speed is around: {speed} kbps", );
-            last_update = std::time::Instant::now();
+            let speed = ( (bytes_since_last_update as f64) / last_update.elapsed().as_secs_f64() ) / (1024.0);
+            log::info!("Speed is around: {speed:2} kiB/s", );
+            last_update = time::Instant::now();
             bytes_since_last_update = 0;
         }
     }
@@ -159,19 +160,27 @@ fn receive(buffer_size: usize, init: ReceiveInit) -> anyhow::Result<()> {
 pub fn send(buffer_size: usize, init: SendInit) -> anyhow::Result<()> {
     let mut sender = TcpStream::connect(init.address)?;
     let mut buf = vec![0_u8; buffer_size].into_boxed_slice();
-    let mut stdin = std::io::stdin();
-
+    let mut stdin = io::stdin();
+    let mut last_update = time::Instant::now();
+    let mut bytes_since_last_update = 0;
     loop{
-        let a = stdin.read(&mut buf)?;
-        log::debug!("Read {} bytes from stdin", a);
-        if a == 0 {
+        let read = stdin.read(&mut buf)?;
+        log::debug!("Read {} bytes from stdin", read);
+        if read == 0 {
             log::info!("Stopping...");
             break; 
         } 
         log::debug!("Sending to socket...");
-        sender.write_all(&buf[..a])?;
+        sender.write_all(&buf[..read])?;
         sender.flush()?;
         log::debug!("Done sending to socket");
+        bytes_since_last_update += read;
+        if bytes_since_last_update >= 1024 * 1024 {
+            let speed = ( (bytes_since_last_update as f64) / last_update.elapsed().as_secs_f64() ) / (1024.0);
+            log::info!("Speed is around: {speed:2} kiB/s", );
+            last_update = time::Instant::now();
+            bytes_since_last_update = 0;
+        }     
     }
 
     Ok(())
