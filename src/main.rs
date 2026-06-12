@@ -97,7 +97,7 @@ pub struct FullSocketInit {}
 
 #[derive(Deserialize, Debug, structopt::StructOpt)]
 pub struct ReceiveInit {
-    #[structopt(long, help = "The address to bind to", default_value = "0.0.0.0:8080")] 
+    #[structopt(long, help = "The address to bind to", default_value = "0.0.0.0:8080")]
     bind_addr: SocketAddrV4,
     #[structopt(long, help = "Include connection information in the output")]
     include_connection_info: bool,
@@ -114,7 +114,7 @@ impl Default for ReceiveInit {
 
 fn receive(buffer_size: usize, init: ReceiveInit) -> anyhow::Result<()> {
     log::info!("Binding to {}", init.bind_addr);
-    
+
     let listener = TcpListener::bind(init.bind_addr).unwrap();
     let (mut socket_stream, addr) = listener.accept()?;
     log::info!("Received connection from {}", addr);
@@ -134,17 +134,16 @@ fn receive(buffer_size: usize, init: ReceiveInit) -> anyhow::Result<()> {
     loop {
         let read = socket_stream.read(&mut buf)?;
         log::debug!("Read {} bytes from socket", read);
-        if read == 0 { 
+        if read == 0 {
             log::info!("Stopping...");
-            break; 
-        } 
+            break;
+        }
         log::debug!("Writing to stdout");
         stdout.write_all(&buf[..read])?;
-        stdout.flush()?;
         log::debug!("Done writing to stdout");
 
         bytes_since_last_update += read;
-        
+
         if bytes_since_last_update >= 1024 * 1024 {
             let speed = ( (bytes_since_last_update as f64) / last_update.elapsed().as_secs_f64() ) / (1024.0);
             log::info!("Speed is around: {speed:2} kiB/s", );
@@ -153,6 +152,7 @@ fn receive(buffer_size: usize, init: ReceiveInit) -> anyhow::Result<()> {
         }
     }
 
+    stdout.flush()?;
 
     Ok(())
 }
@@ -170,22 +170,22 @@ pub fn send(buffer_size: usize, init: SendInit) -> anyhow::Result<()> {
         log::debug!("Read {} bytes from stdin", read);
         if read == 0 {
             log::info!("Stopping...");
-            break; 
-        } 
+            break;
+        }
         log::debug!("Sending to socket...");
         sender.write_all(&buf[..read])?;
-        sender.flush()?;
         log::debug!("Done sending to socket");
         bytes_since_last_update += read;
 
         if bytes_since_last_update >= 1024 * 1024 {
-            let round_speed = ( (bytes_since_last_update as f64) / last_update.elapsed().as_secs_f64() ) / (1024.0); 
+            let round_speed = ( (bytes_since_last_update as f64) / last_update.elapsed().as_secs_f64() ) / (1024.0);
             speed = speed * (1.0 - speed_factor) + round_speed * speed_factor;
             log::info!("Speed is around: {speed:2} kiB/s", );
             last_update = time::Instant::now();
             bytes_since_last_update = 0;
-        }     
+        }
     }
+    sender.flush()?;
 
     Ok(())
 }
