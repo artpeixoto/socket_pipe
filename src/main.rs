@@ -121,13 +121,15 @@ fn receive(buffer_size: usize, init: ReceiveInit) -> anyhow::Result<()> {
 
 
     log::debug!("locking stdout...");
-    let mut stdout = stdout();
+    let stdout = stdout();
+    let mut stdout = stdout.lock();
     log::debug!("ready");
 
     if init.include_connection_info {
         stdout.write_all(format!("connection: {}\n\n", &addr).as_bytes())?;
         stdout.flush()?;
     }
+
     let mut buf = vec![0_u8; buffer_size].into_boxed_slice();
     let mut last_update = time::Instant::now();
     let mut bytes_since_last_update = 0;
@@ -160,7 +162,10 @@ fn receive(buffer_size: usize, init: ReceiveInit) -> anyhow::Result<()> {
 pub fn send(buffer_size: usize, init: SendInit) -> anyhow::Result<()> {
     let mut sender = TcpStream::connect(init.address)?;
     let mut buf = vec![0_u8; buffer_size].into_boxed_slice();
-    let mut stdin = io::stdin();
+
+    let stdin = io::stdin();
+    let mut stdin = stdin.lock();
+
     let mut last_update = time::Instant::now();
     let mut bytes_since_last_update = 0;
     let mut speed = 0.0;
@@ -178,9 +183,9 @@ pub fn send(buffer_size: usize, init: SendInit) -> anyhow::Result<()> {
         bytes_since_last_update += read;
 
         if bytes_since_last_update >= 1024 * 1024 {
-            let round_speed = ( (bytes_since_last_update as f64) / last_update.elapsed().as_secs_f64() ) / (1024.0);
+            let round_speed = ( (bytes_since_last_update as f64) / last_update.elapsed().as_secs_f64() ) / (1024.0 * 1024.0);
             speed = speed * (1.0 - speed_factor) + round_speed * speed_factor;
-            log::info!("Speed is around: {speed:2} kiB/s", );
+            log::info!("Speed is around: {speed:2} MiB/s", );
             last_update = time::Instant::now();
             bytes_since_last_update = 0;
         }
