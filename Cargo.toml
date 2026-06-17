@@ -22,4 +22,4 @@ opt-level = 3
 panic = "abort"
 lto = "fat"
 build-units = 1
-debug="strip"
+debug="none"
