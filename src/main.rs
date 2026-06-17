@@ -262,8 +262,12 @@ impl ConstCapBuf {
     ) -> Result<bool, io::Error> {
         match fun(&mut self.storage).await {
             Ok(len) => {
-	            self.len = len;
-				return Ok(true);
+            	if len == 0 {
+		            return Ok(false)
+             	} else {
+		            self.len = len;
+					return Ok(true);
+              	}
             },
             Err(e) => match e.kind() {
                 std::io::ErrorKind::ConnectionAborted => {
