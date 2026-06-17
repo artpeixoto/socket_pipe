@@ -466,6 +466,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "net_pipe"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "either",
+ "env_logger 0.11.8",
+ "log",
+ "quicli",
+ "serde",
+ "serde_json",
+ "structopt 0.3.26",
+ "structstruck",
+ "tokio",
+ "tokio-scoped",
+ "tracing",
+]
+
+[[package]]
 name = "object"
 version = "0.37.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -769,24 +787,6 @@ checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
 dependencies = [
  "libc",
  "windows-sys",
-]
-
-[[package]]
-name = "socket_pipe"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "either",
- "env_logger 0.11.8",
- "log",
- "quicli",
- "serde",
- "serde_json",
- "structopt 0.3.26",
- "structstruck",
- "tokio",
- "tokio-scoped",
- "tracing",
 ]
 
 [[package]]

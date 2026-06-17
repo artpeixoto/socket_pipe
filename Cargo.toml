@@ -1,5 +1,5 @@
 [package]
-name = "socket_pipe"
+name = "net_pipe"
 version = "0.1.0"
 edition = "2024"
 
@@ -23,3 +23,4 @@ panic = "abort"
 lto = "fat"
 build-units = 1
 debug="none"
+incremental=false
