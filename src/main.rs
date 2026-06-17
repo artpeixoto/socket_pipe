@@ -1,10 +1,28 @@
+// use std::{
+//     io::{ self, IoSlice, Read, Write, prelude::*, stdout  }, net::{ IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream, UdpSocket }, str::FromStr, sync::{Condvar, Mutex, MutexGuard}, time::{self, Duration}
+// };
+
+#[deny(clippy::unused_async)]
 use std::{
-    io::{ self, IoSlice, Read, Write, stdout }, net::{ IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream, UdpSocket }, str::FromStr, time::{self, Duration}
+    net::{Ipv4Addr, SocketAddrV4},
+    str::FromStr,
+    time,
 };
+
+use anyhow::{Result, anyhow};
 use quicli::prelude::*;
 use structopt::StructOpt;
+use tokio::{
+    io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt as _, stdout},
+    join,
+    net::{TcpListener, TcpStream},
+    pin,
+    sync::{futures, mpsc},
+    try_join,
+};
 
-fn main() {
+#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
+async fn main() {
     let init: Init = Init::from_args();
 
     env_logger::Builder::new()
@@ -13,11 +31,13 @@ fn main() {
 
     match init.subcommand {
         SubCommand::Receive(receive_init) => {
-            receive(init.buffer_size, receive_init).unwrap();
+            receive(init.buffer_size, receive_init).await.unwrap();
         }
         SubCommand::Send(send_init) => {
-            send(init.buffer_size, send_init).unwrap();
+            send(init.buffer_size, send_init).await.unwrap();
         }
+       
+       
         // SubCommand::Socket(_full_socket_init) => {
         //     unimplemented!();
         // }
@@ -25,20 +45,29 @@ fn main() {
 }
 
 #[derive(Deserialize, Debug, structopt::StructOpt)]
-#[structopt(name="socket_pipe", about="A simple socket pipe utility")]
+#[structopt(name = "socket_pipe", about = "A simple socket pipe utility")]
 pub struct Init {
     #[structopt(flatten)]
     subcommand: SubCommand,
 
-    #[structopt(short, long="log", default_value="info", help="Set the log level (error, warn, info, debug, trace)")]
+    #[structopt(
+        short,
+        long = "log",
+        default_value = "info",
+        help = "Set the log level (error, warn, info, debug, trace)"
+    )]
     log: LogLevel,
 
-    #[structopt(long="buffer-size", default_value="32768", help="Set the buffer size for reading/writing data")]
+    #[structopt(
+        long = "buffer-size",
+        default_value = "131072",
+        help = "Set the buffer size for reading/writing data"
+    )]
     buffer_size: usize,
 }
 
 #[derive(Deserialize, Debug, structopt::StructOpt)]
-pub enum LogLevel{
+pub enum LogLevel {
     #[structopt(name = "error")]
     Error,
     #[structopt(name = "warn")]
@@ -61,15 +90,15 @@ impl Into<log::LevelFilter> for LogLevel {
         }
     }
 }
-impl FromStr for LogLevel{
+impl FromStr for LogLevel {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().trim(){
+        match s.to_lowercase().trim() {
             "error" | "e" => Ok(LogLevel::Error),
-            "warn"  | "w" => Ok(LogLevel::Warn),
-            "info"  | "i" => Ok(LogLevel::Info),
-            "debug" | "d"  => Ok(LogLevel::Debug),
-            "trace" | "t"  => Ok(LogLevel::Trace),
+            "warn" | "w" => Ok(LogLevel::Warn),
+            "info" | "i" => Ok(LogLevel::Info),
+            "debug" | "d" => Ok(LogLevel::Debug),
+            "trace" | "t" => Ok(LogLevel::Trace),
             _ => Err(anyhow::anyhow!("Invalid log level: {}", s)),
         }
     }
@@ -84,7 +113,6 @@ pub enum SubCommand {
     // #[structopt(name = "socket")]
     // Socket(FullSocketInit),
 }
-
 
 #[derive(Deserialize, Debug, structopt::StructOpt)]
 pub struct SendInit {
@@ -112,85 +140,167 @@ impl Default for ReceiveInit {
     }
 }
 
-fn receive(buffer_size: usize, init: ReceiveInit) -> anyhow::Result<()> {
+async fn receive(buffer_size: usize, init: ReceiveInit) -> Result<()> {
     log::info!("Binding to {}", init.bind_addr);
 
-    let listener = TcpListener::bind(init.bind_addr).unwrap();
-    let (mut socket_stream, addr) = listener.accept()?;
+    let listener = TcpListener::bind(init.bind_addr).await?;
+    let (mut socket_stream, addr) = listener.accept().await?;
     log::info!("Received connection from {}", addr);
 
-
     log::debug!("locking stdout...");
-    let stdout = stdout();
-    let mut stdout = stdout.lock();
-    log::debug!("ready");
+    let mut stdout = stdout();
 
     if init.include_connection_info {
-        stdout.write_all(format!("connection: {}\n\n", &addr).as_bytes())?;
-        stdout.flush()?;
+        stdout
+            .write_all(format!("connection: {}\n\n", &addr).as_bytes())
+            .await?;
+
+        stdout.flush().await?;
     }
 
-    let mut buf = vec![0_u8; buffer_size].into_boxed_slice();
-    let mut last_update = time::Instant::now();
-    let mut bytes_since_last_update = 0;
-    loop {
-        let read = socket_stream.read(&mut buf)?;
-        log::debug!("Read {} bytes from socket", read);
-        if read == 0 {
-            log::info!("Stopping...");
-            break;
-        }
-        log::debug!("Writing to stdout");
-        stdout.write_all(&buf[..read])?;
-        log::debug!("Done writing to stdout");
-
-        bytes_since_last_update += read;
-
-        if bytes_since_last_update >= 1024 * 1024 {
-            let speed = ( (bytes_since_last_update as f64) / last_update.elapsed().as_secs_f64() ) / (1024.0);
-            log::info!("Speed is around: {speed:2} kiB/s", );
-            last_update = time::Instant::now();
-            bytes_since_last_update = 0;
-        }
-    }
-
-    stdout.flush()?;
+    move_data(socket_stream, stdout, buffer_size).await?;
 
     Ok(())
 }
 
-pub fn send(buffer_size: usize, init: SendInit) -> anyhow::Result<()> {
-    let mut sender = TcpStream::connect(init.address)?;
-    let mut buf = vec![0_u8; buffer_size].into_boxed_slice();
+pub async fn move_data(
+    from: impl AsyncRead,
+    to: impl AsyncWrite,
+    buffer_size: usize,
+) -> Result<()> {
+    let (mut data_sender, mut data_receiver) = mpsc::channel(3);
+    let (mut waste_sender, mut waste_receiver) = mpsc::channel(3);
 
+    for _ in 0..3 {
+        waste_sender.send(ConstCapBuf::new(buffer_size)).await?;
+    }
+
+    pin!(from);
+    pin!(to);
+
+    let reader = (async move {
+        loop {
+            let Some(mut data_buf) = waste_receiver.recv().await else {
+                break;
+            };
+            let is_done = data_buf
+                .write(async |buf| {
+                    let a = from.read(buf).await?;
+                    Ok(a)
+                })
+                .await?;
+
+            if is_done {
+                break;
+            }
+
+            data_sender
+                .send(data_buf)
+                .await
+                .map_err(|_| anyhow!("fuck"))
+                .unwrap();
+        }
+        drop(data_sender);
+        Result::<(), anyhow::Error>::Ok(())
+    });
+
+    let writer = async move {
+        loop {
+            let Some(mut data_buf) = data_receiver.recv().await else {
+                break;
+            };
+
+            to.write_all(data_buf.read()).await?;
+
+            waste_sender.send(data_buf).await?;
+        }
+        to.flush().await?;
+
+        Result::<(), anyhow::Error>::Ok(())
+    };
+
+    try_join!(reader, writer)?;
+
+    Ok(())
+}
+
+pub async fn send(buffer_size: usize, init: SendInit) -> anyhow::Result<()> {
+    let mut socket_stream = TcpStream::connect(init.address).await?;
+    let mut buf = vec![0_u8; buffer_size].into_boxed_slice();
     let stdin = io::stdin();
-    let mut stdin = stdin.lock();
 
-    let mut last_update = time::Instant::now();
-    let mut bytes_since_last_update = 0;
-    let mut speed = 0.0;
-    let speed_factor = 0.4;
-    loop{
-        let read = stdin.read(&mut buf)?;
-        log::debug!("Read {} bytes from stdin", read);
-        if read == 0 {
-            log::info!("Stopping...");
-            break;
-        }
-        log::debug!("Sending to socket...");
-        sender.write_all(&buf[..read])?;
-        log::debug!("Done sending to socket");
-        bytes_since_last_update += read;
-
-        if bytes_since_last_update >= 1024 * 1024 {
-            let round_speed = ( (bytes_since_last_update as f64) / last_update.elapsed().as_secs_f64() ) / (1024.0 * 1024.0);
-            speed = speed * (1.0 - speed_factor) + round_speed * speed_factor;
-            log::info!("Speed is around: {speed:2} MiB/s", );
-            last_update = time::Instant::now();
-            bytes_since_last_update = 0;
-        }
-    }
-    sender.flush()?;
+    move_data(stdin, socket_stream, buffer_size).await?;
 
     Ok(())
 }
+
+// pub struct SharedBuffer<const LEN: usize>{
+// 	inner: Mutex<[u8;LEN]>,
+// 	filled_semaphore: std::processFutex,
+// 	emptied_semaphore: Mutex<bool>,
+// }
+
+pub struct ConstCapBuf {
+    storage: Box<[u8]>,
+    len: usize,
+}
+
+impl ConstCapBuf {
+    pub fn new(cap: usize) -> Self {
+        Self {
+            storage: vec![0_u8; cap].into_boxed_slice(),
+            len: 0,
+        }
+    }
+    pub fn read(&self) -> &[u8] {
+        &self.storage[..self.len]
+    }
+
+    pub async fn write(
+        &mut self,
+        fun: impl AsyncFnOnce(&mut [u8]) -> Result<usize>,
+    ) -> Result<bool, anyhow::Error> {
+        let new_len = fun(&mut self.storage).await?;
+        self.len = new_len;
+        Ok(self.len == 0)
+    }
+}
+
+// impl ConstCapBuf{
+// 	pub fn fill
+// }
+
+// impl<const LEN: usize> ConstCapBuf<LEN>{
+// 	pub fn new() -> Self{
+// 		Self{
+// 			storage: [0_u8;_],
+// 			len: 0
+// 		}
+// 	}
+// }
+
+// impl<const LEN: usize> SharedBuffer<LEN>{
+// 	pub fn new_empty() -> Self{
+// 		let mut res = Self{
+// 			inner: Mutex::new([0_u8;_]),
+// 			filled_semaphore: Condvar::new(),
+// 			emptied_semaphore: std::sync::
+// 		};
+// 		res.emptied_semaphore.notify_one();
+// 		res
+// 	}
+
+// 	pub fn empty_data(&mut self, func: impl FnOnce(&mut [u8])){
+// 		let mutex = Mutex::new(());
+// 		let mutex_lock = mutex.lock().unwrap()
+// 		self.emptied_semaphore.wait_timeout_while(guard, dur, condition)
+// 	}
+
+// 	pub fn insert_data(&mut self, func: impl FnOnce(&mut [u8;LEN]) -> usize) {
+// 		self.
+// 	}
+// }
+
+// pub struct SharedBufferDataRef<'a>{
+// 	data_lock:
+// }
