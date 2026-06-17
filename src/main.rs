@@ -21,7 +21,7 @@ use tokio::{
     try_join,
 };
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() {
     let init: Init = Init::from_args();
 
@@ -35,12 +35,9 @@ async fn main() {
         }
         SubCommand::Send(send_init) => {
             send(init.buffer_size, send_init).await.unwrap();
-        }
-       
-       
-        // SubCommand::Socket(_full_socket_init) => {
-        //     unimplemented!();
-        // }
+        } // SubCommand::Socket(_full_socket_init) => {
+          //     unimplemented!();
+          // }
     }
 }
 
@@ -60,7 +57,7 @@ pub struct Init {
 
     #[structopt(
         long = "buffer-size",
-        default_value = "131072",
+        default_value = "4096",
         help = "Set the buffer size for reading/writing data"
     )]
     buffer_size: usize,
@@ -145,6 +142,7 @@ async fn receive(buffer_size: usize, init: ReceiveInit) -> Result<()> {
 
     let listener = TcpListener::bind(init.bind_addr).await?;
     let (mut socket_stream, addr) = listener.accept().await?;
+
     log::info!("Received connection from {}", addr);
 
     log::debug!("locking stdout...");
@@ -183,14 +181,16 @@ pub async fn move_data(
             let Some(mut data_buf) = waste_receiver.recv().await else {
                 break;
             };
-            let is_done = data_buf
+
+            let has_data =
+            	data_buf
                 .write(async |buf| {
                     let a = from.read(buf).await?;
                     Ok(a)
                 })
                 .await?;
 
-            if is_done {
+            if !has_data {
                 break;
             }
 
@@ -258,11 +258,20 @@ impl ConstCapBuf {
 
     pub async fn write(
         &mut self,
-        fun: impl AsyncFnOnce(&mut [u8]) -> Result<usize>,
-    ) -> Result<bool, anyhow::Error> {
-        let new_len = fun(&mut self.storage).await?;
-        self.len = new_len;
-        Ok(self.len == 0)
+        fun: impl AsyncFnOnce(&mut [u8]) -> Result<usize, io::Error>,
+    ) -> Result<bool, io::Error> {
+        match fun(&mut self.storage).await {
+            Ok(len) => {
+	            self.len = len;
+				return Ok(true);
+            },
+            Err(e) => match e.kind() {
+                std::io::ErrorKind::ConnectionAborted => {
+                	return Ok(false);
+                }
+                _ => {return Err(e)}
+            },
+        };
     }
 }
 
