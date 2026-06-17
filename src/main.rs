@@ -212,7 +212,7 @@ pub async fn move_data(
 
             to.write_all(data_buf.read()).await?;
 
-            let Ok(_) = waste_sender.send(data_buf).await else {break};
+            let Ok(_) = waste_sender.send(data_buf).await else {continue};
         }
         to.flush().await?;
 
