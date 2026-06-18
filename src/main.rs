@@ -57,7 +57,7 @@ pub struct Init {
 
     #[structopt(
         long = "buffer-size",
-        default_value = "4096",
+        default_value = "131072",
         help = "Set the buffer size for reading/writing data"
     )]
     buffer_size: usize,
